@@ -1,7 +1,7 @@
 # ============================================================
-#   QuantVision — AI-Powered Portfolio Optimizer
-#   Author: [Your Name] | DTU Mathematics & Computing
-#   Stack:  Python · Streamlit · Scikit-Learn · Plotly
+#   QuantVision — AI-Powered Portfolio Optimizer  v2.0
+#   Author: Shivansh Raj | DTU Mathematics & Computing
+#   NEW in v2: News Sentiment Analysis tab
 # ============================================================
 
 import warnings
@@ -31,7 +31,6 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    /* Dark gradient header */
     .main-title {
         font-size: 2.8rem;
         font-weight: 900;
@@ -48,7 +47,6 @@ st.markdown("""
         font-size: 0.95rem;
         margin-bottom: 20px;
     }
-    /* Style metric boxes */
     div[data-testid="metric-container"] {
         background: #1a1a2e;
         border: 1px solid #2d2d44;
@@ -59,7 +57,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown('<div class="main-title">📊 QuantVision</div>', unsafe_allow_html=True)
-st.markdown('<div class="subtitle">AI-Powered Portfolio Optimizer · Built on Modern Portfolio Theory + Machine Learning</div>', unsafe_allow_html=True)
+st.markdown('<div class="subtitle">AI-Powered Portfolio Optimizer · Modern Portfolio Theory + Machine Learning + News Sentiment</div>', unsafe_allow_html=True)
 st.divider()
 
 
@@ -70,10 +68,12 @@ with st.sidebar:
     st.markdown("## ⚙️ Settings")
 
     st.markdown("### 📌 Stock Tickers")
+    st.caption("🇺🇸 US stocks: AAPL, GOOGL, TSLA")
+    st.caption("🇮🇳 Indian stocks: RELIANCE.NS, TCS.NS, INFY.NS")
     tickers_raw = st.text_input(
         "Enter comma-separated tickers",
         value="AAPL, GOOGL, MSFT, AMZN, TSLA",
-        help="E.g.  AAPL, GOOGL, MSFT, TCS.NS (Indian stocks use .NS)"
+        help="Add .NS suffix for Indian NSE stocks e.g. TCS.NS"
     )
     tickers = [t.strip().upper() for t in tickers_raw.split(",") if t.strip()]
 
@@ -95,7 +95,6 @@ with st.sidebar:
     opt_goal = st.radio(
         "Optimize for:",
         ["Max Sharpe Ratio", "Min Volatility"],
-        help="Sharpe = best return per unit of risk. Min Vol = safest portfolio."
     )
 
     run_btn = st.button("🚀 Run Analysis", type="primary", use_container_width=True)
@@ -109,10 +108,9 @@ with st.sidebar:
 # ─────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def load_prices(tickers, start, end):
-    """Download adjusted closing prices from Yahoo Finance."""
     raw = yf.download(tickers, start=start, end=end, auto_adjust=True, progress=False)
     prices = raw["Close"] if "Close" in raw.columns else raw
-    if isinstance(prices, pd.Series):           # single ticker edge-case
+    if isinstance(prices, pd.Series):
         prices = prices.to_frame(name=tickers[0])
     return prices.dropna(axis=1, how="all").dropna()
 
@@ -121,7 +119,6 @@ def load_prices(tickers, start, end):
 #  PORTFOLIO MATH (Markowitz MPT)
 # ─────────────────────────────────────────────
 def port_stats(w, mu, cov, rf):
-    """Return (annual_return, annual_vol, sharpe) for weight vector w."""
     ret = float(np.dot(w, mu)) * 252
     vol = float(np.sqrt(w @ (cov * 252) @ w))
     sharpe = (ret - rf) / vol if vol > 0 else 0
@@ -129,23 +126,19 @@ def port_stats(w, mu, cov, rf):
 
 
 def optimize(returns_df, rf, goal="sharpe"):
-    """
-    Find optimal portfolio weights via constrained numerical optimization.
-    Uses scipy.optimize.minimize with SLSQP method.
-    """
     n   = len(returns_df.columns)
     mu  = returns_df.mean()
     cov = returns_df.cov()
-    w0  = np.full(n, 1 / n)                       # equal-weight starting point
-    bounds      = [(0.01, 0.60)] * n               # each asset: 1%–60%
+    w0  = np.full(n, 1 / n)
+    bounds      = [(0.01, 0.60)] * n
     constraints = [{"type": "eq", "fun": lambda w: w.sum() - 1}]
 
     if goal == "sharpe":
         def objective(w):
-            return -port_stats(w, mu, cov, rf)[2]  # maximise Sharpe ⟹ minimise –Sharpe
+            return -port_stats(w, mu, cov, rf)[2]
     else:
         def objective(w):
-            return port_stats(w, mu, cov, rf)[1]   # minimise volatility
+            return port_stats(w, mu, cov, rf)[1]
 
     result = minimize(objective, w0, method="SLSQP",
                       bounds=bounds, constraints=constraints,
@@ -154,7 +147,6 @@ def optimize(returns_df, rf, goal="sharpe"):
 
 
 def efficient_frontier_cloud(returns_df, rf, n=4000):
-    """Simulate random portfolios to draw the Efficient Frontier scatter cloud."""
     n_assets = len(returns_df.columns)
     mu  = returns_df.mean() * 252
     cov = returns_df.cov()  * 252
@@ -171,16 +163,13 @@ def efficient_frontier_cloud(returns_df, rf, n=4000):
 #  RISK METRICS
 # ─────────────────────────────────────────────
 def value_at_risk(ret_series, conf=0.95):
-    """Historical VaR at given confidence level."""
     return float(np.percentile(ret_series, (1 - conf) * 100))
 
 def max_drawdown(price_series):
-    """Maximum peak-to-trough drawdown."""
     rolling_max = price_series.cummax()
     return float(((price_series - rolling_max) / rolling_max).min())
 
 def beta(stock_ret, bench_ret):
-    """Beta relative to benchmark."""
     cov_mat = np.cov(stock_ret, bench_ret)
     return cov_mat[0, 1] / cov_mat[1, 1] if cov_mat[1, 1] != 0 else 1.0
 
@@ -189,12 +178,6 @@ def beta(stock_ret, bench_ret):
 #  ML PREDICTOR
 # ─────────────────────────────────────────────
 def build_features(price_s: pd.Series) -> pd.DataFrame:
-    """
-    Engineer technical-indicator features from a price series.
-    Features used:
-      - Log returns, MA ratios (5/10/20/50-day), RSI-14,
-        realised volatility (5/20-day), momentum (5/10/20-day).
-    """
     df = pd.DataFrame(index=price_s.index)
     ret = price_s.pct_change()
     log_ret = np.log(price_s / price_s.shift(1))
@@ -211,21 +194,16 @@ def build_features(price_s: pd.Series) -> pd.DataFrame:
     df["mom10"]        = price_s / price_s.shift(10) - 1
     df["mom20"]        = price_s / price_s.shift(20) - 1
 
-    # RSI-14
     delta = price_s.diff()
     gain  = delta.clip(lower=0).rolling(14).mean()
     loss  = (-delta.clip(upper=0)).rolling(14).mean()
     df["rsi"] = 100 - 100 / (1 + gain / loss.replace(0, np.nan))
 
-    df["target"] = ret.shift(-1)   # next-day return = what we predict
+    df["target"] = ret.shift(-1)
     return df.dropna()
 
 
 def train_predictor(price_s: pd.Series):
-    """
-    Train a Random Forest Regressor.
-    Returns: model, scaler, X_test, y_test, y_pred, direction_accuracy
-    """
     feats = build_features(price_s)
     X = feats.drop("target", axis=1)
     y = feats["target"]
@@ -248,9 +226,97 @@ def train_predictor(price_s: pd.Series):
 
 
 # ─────────────────────────────────────────────
+#  NEWS SENTIMENT ANALYSIS  ← NEW FEATURE
+# ─────────────────────────────────────────────
+
+# Financial keyword lists for sentiment scoring
+POSITIVE_WORDS = [
+    'surge', 'gain', 'profit', 'growth', 'rise', 'beat', 'strong', 'positive',
+    'record', 'buy', 'upgrade', 'outperform', 'rally', 'boost', 'soar', 'high',
+    'success', 'exceed', 'win', 'increase', 'advance', 'jump', 'recover',
+    'expand', 'bullish', 'breakthrough', 'impressive', 'opportunity', 'peak',
+    'revenue', 'dividend', 'acquisition', 'partnership', 'launch', 'approval'
+]
+
+NEGATIVE_WORDS = [
+    'fall', 'drop', 'loss', 'decline', 'weak', 'miss', 'negative', 'down',
+    'cut', 'downgrade', 'underperform', 'sell', 'plunge', 'crash', 'risk',
+    'concern', 'fear', 'warn', 'threat', 'decrease', 'slump', 'tumble',
+    'bearish', 'struggle', 'problem', 'fail', 'lawsuit', 'investigation',
+    'recall', 'layoff', 'bankruptcy', 'debt', 'tariff', 'sanction', 'fine'
+]
+
+def analyze_sentiment(text):
+    """
+    Keyword-based financial sentiment analysis.
+    Returns: (label, score, color)
+    Score > 0.1  → Bullish
+    Score < -0.1 → Bearish
+    Otherwise    → Neutral
+    """
+    text_lower = text.lower()
+    pos = sum(1 for w in POSITIVE_WORDS if w in text_lower)
+    neg = sum(1 for w in NEGATIVE_WORDS if w in text_lower)
+    total = pos + neg
+    score = (pos - neg) / total if total > 0 else 0.0
+
+    if score > 0.1:
+        return "🟢 Bullish", score, "#00C851"
+    elif score < -0.1:
+        return "🔴 Bearish", score, "#FF4444"
+    else:
+        return "🟡 Neutral", score, "#FFBB33"
+
+
+def get_stock_news(ticker, max_items=6):
+    """Fetch latest news headlines from Yahoo Finance via yfinance."""
+    try:
+        stock = yf.Ticker(ticker)
+        raw_news = stock.news
+        if not raw_news:
+            return []
+
+        results = []
+        for item in raw_news[:max_items]:
+            # yfinance changed its news format — handle both old & new
+            try:
+                content = item.get('content', {})
+                if isinstance(content, dict) and content:
+                    title     = content.get('title', '')
+                    publisher = content.get('provider', {}).get('displayName', '') \
+                                if isinstance(content.get('provider'), dict) else ''
+                    link      = content.get('canonicalUrl', {}).get('url', '') \
+                                if isinstance(content.get('canonicalUrl'), dict) else ''
+                else:
+                    title     = item.get('title', '')
+                    publisher = item.get('publisher', '')
+                    link      = item.get('link', '')
+            except Exception:
+                title     = item.get('title', '')
+                publisher = item.get('publisher', '')
+                link      = item.get('link', '')
+
+            if not title:
+                continue
+
+            label, score, color = analyze_sentiment(title)
+            results.append({
+                'title':     title,
+                'label':     label,
+                'score':     score,
+                'color':     color,
+                'link':      link,
+                'publisher': publisher
+            })
+
+        return results
+    except Exception:
+        return []
+
+
+# ─────────────────────────────────────────────
 #  MAIN DASHBOARD
 # ─────────────────────────────────────────────
-# Load data immediately (cached) so the page isn't blank on first load
 with st.spinner("📡 Fetching market data from Yahoo Finance …"):
     try:
         prices = load_prices(tickers, start_date, end_date)
@@ -260,17 +326,19 @@ with st.spinner("📡 Fetching market data from Yahoo Finance …"):
 
 valid_tickers = list(prices.columns)
 if not valid_tickers:
-    st.error("No valid tickers found. Please check your input and try again.")
+    st.error("No valid tickers found. Please check your input.")
     st.stop()
 
 daily_ret = prices.pct_change().dropna()
 COLORS    = px.colors.qualitative.Plotly
 
-TAB_OVERVIEW, TAB_OPTIMIZER, TAB_RISK, TAB_AI = st.tabs([
+# ── 5 tabs now (added News Sentiment) ──
+TAB_OVERVIEW, TAB_OPTIMIZER, TAB_RISK, TAB_AI, TAB_NEWS = st.tabs([
     "📈  Market Overview",
     "🎯  Portfolio Optimizer",
     "⚠️  Risk Analysis",
     "🤖  AI Predictor",
+    "📰  News Sentiment",        # ← NEW
 ])
 
 
@@ -280,7 +348,6 @@ TAB_OVERVIEW, TAB_OPTIMIZER, TAB_RISK, TAB_AI = st.tabs([
 with TAB_OVERVIEW:
     st.subheader("📈 Live Stock Performance")
 
-    # ── Top metric row ──
     cols = st.columns(len(valid_tickers))
     for i, tkr in enumerate(valid_tickers):
         cur  = prices[tkr].iloc[-1]
@@ -294,7 +361,6 @@ with TAB_OVERVIEW:
 
     st.divider()
 
-    # ── Normalised price chart ──
     st.subheader("📊 Normalised Price Chart  (Base = 100)")
     norm = prices / prices.iloc[0] * 100
     fig_price = go.Figure()
@@ -310,7 +376,6 @@ with TAB_OVERVIEW:
                             legend=dict(orientation="h", y=1.08), hovermode="x unified")
     st.plotly_chart(fig_price, use_container_width=True)
 
-    # ── Returns distribution + Correlation ──
     c1, c2 = st.columns(2)
 
     with c1:
@@ -333,15 +398,14 @@ with TAB_OVERVIEW:
         fig_corr.update_layout(template="plotly_dark", height=360)
         st.plotly_chart(fig_corr, use_container_width=True)
 
-    # ── Summary stats table ──
     st.subheader("📋 Summary Statistics")
     stats = pd.DataFrame({
-        "Ticker": valid_tickers,
-        "Total Return": [f"{(prices[t].iloc[-1]/prices[t].iloc[0]-1)*100:.2f}%" for t in valid_tickers],
-        "Ann. Return":  [f"{daily_ret[t].mean()*252*100:.2f}%"                  for t in valid_tickers],
-        "Ann. Volatility": [f"{daily_ret[t].std()*np.sqrt(252)*100:.2f}%"       for t in valid_tickers],
-        "Best Day":     [f"{daily_ret[t].max()*100:.2f}%"                        for t in valid_tickers],
-        "Worst Day":    [f"{daily_ret[t].min()*100:.2f}%"                        for t in valid_tickers],
+        "Ticker":          valid_tickers,
+        "Total Return":    [f"{(prices[t].iloc[-1]/prices[t].iloc[0]-1)*100:.2f}%" for t in valid_tickers],
+        "Ann. Return":     [f"{daily_ret[t].mean()*252*100:.2f}%"                  for t in valid_tickers],
+        "Ann. Volatility": [f"{daily_ret[t].std()*np.sqrt(252)*100:.2f}%"          for t in valid_tickers],
+        "Best Day":        [f"{daily_ret[t].max()*100:.2f}%"                       for t in valid_tickers],
+        "Worst Day":       [f"{daily_ret[t].min()*100:.2f}%"                       for t in valid_tickers],
     })
     st.dataframe(stats, use_container_width=True, hide_index=True)
 
@@ -366,18 +430,16 @@ with TAB_OPTIMIZER:
         r_opt, v_opt, s_opt = port_stats(w_opt, mu, cov, rf_rate)
         ef          = efficient_frontier_cloud(daily_ret, rf_rate)
 
-    # ── Key metrics ──
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("📈 Expected Annual Return",  f"{r_opt*100:.2f}%")
-    m2.metric("📉 Annual Volatility (Risk)", f"{v_opt*100:.2f}%")
-    m3.metric("⭐ Sharpe Ratio",              f"{s_opt:.3f}")
-    m4.metric("💰 Expected 1-yr Gain",       f"${investment*r_opt:,.0f}")
+    m1.metric("📈 Expected Annual Return",   f"{r_opt*100:.2f}%")
+    m2.metric("📉 Annual Volatility (Risk)",  f"{v_opt*100:.2f}%")
+    m3.metric("⭐ Sharpe Ratio",               f"{s_opt:.3f}")
+    m4.metric("💰 Expected 1-yr Gain",        f"${investment*r_opt:,.0f}")
 
     st.divider()
     c1, c2 = st.columns([1.3, 0.7])
 
     with c1:
-        # Efficient Frontier scatter
         st.subheader("🌊 Efficient Frontier")
         fig_ef = go.Figure()
         fig_ef.add_trace(go.Scatter(
@@ -392,8 +454,6 @@ with TAB_OPTIMIZER:
             x=[v_opt], y=[r_opt], mode="markers",
             marker=dict(size=18, color="red", symbol="star"),
             name="⭐ Optimal Portfolio",
-            hovertemplate=(f"<b>OPTIMAL</b><br>Vol: {v_opt:.2%}"
-                           f"<br>Ret: {r_opt:.2%}<br>Sharpe: {s_opt:.3f}<extra></extra>")
         ))
         fig_ef.update_layout(
             template="plotly_dark", height=430,
@@ -410,18 +470,16 @@ with TAB_OPTIMIZER:
             color_discrete_sequence=px.colors.qualitative.Set2
         )
         fig_pie.update_traces(textinfo="percent+label")
-        fig_pie.update_layout(template="plotly_dark", height=430,
-                              showlegend=False)
+        fig_pie.update_layout(template="plotly_dark", height=430, showlegend=False)
         st.plotly_chart(fig_pie, use_container_width=True)
 
-    # ── Allocation table ──
     st.subheader("💼 Detailed Allocation")
     alloc = pd.DataFrame({
-        "Stock":               valid_tickers,
-        "Weight":              [f"{w*100:.1f}%"          for w in w_opt],
-        "Amount Invested":     [f"${w*investment:,.2f}"  for w in w_opt],
-        "Annual Return Contrib.":[f"{w * daily_ret[t].mean() * 252 * 100:.2f}%"
-                                  for w, t in zip(w_opt, valid_tickers)],
+        "Stock":                  valid_tickers,
+        "Weight":                 [f"{w*100:.1f}%"          for w in w_opt],
+        "Amount Invested":        [f"${w*investment:,.2f}"  for w in w_opt],
+        "Annual Return Contrib.": [f"{w * daily_ret[t].mean() * 252 * 100:.2f}%"
+                                   for w, t in zip(w_opt, valid_tickers)],
     })
     st.dataframe(alloc, use_container_width=True, hide_index=True)
 
@@ -432,7 +490,6 @@ with TAB_OPTIMIZER:
 with TAB_RISK:
     st.subheader("⚠️ Comprehensive Risk Dashboard")
 
-    # ── Fetch S&P 500 benchmark ──
     with st.spinner("📡 Loading S&P 500 benchmark (SPY)…"):
         try:
             bench_prices = load_prices(["SPY"], start_date, end_date)
@@ -441,7 +498,6 @@ with TAB_RISK:
         except Exception:
             has_bench = False
 
-    # ── Per-stock risk table ──
     rows = []
     for tkr in valid_tickers:
         r   = daily_ret[tkr]
@@ -498,19 +554,15 @@ with TAB_RISK:
                              yaxis_title="Drawdown (%)")
         st.plotly_chart(fig_dd, use_container_width=True)
 
-    # ── Portfolio-level VaR ──
     st.subheader(f"💼 Portfolio Value-at-Risk  (Investment = ${investment:,.0f})")
     port_r = daily_ret[valid_tickers].dot(w_opt)
     v95 = abs(value_at_risk(port_r, 0.95)) * investment
     v99 = abs(value_at_risk(port_r, 0.99)) * investment
 
     pa, pb, pc = st.columns(3)
-    pa.metric("Daily VaR 95%",          f"-${v95:,.2f}",
-              help="On 95% of days, your loss won't exceed this.")
-    pb.metric("Daily VaR 99%",          f"-${v99:,.2f}",
-              help="On 99% of days, your loss won't exceed this.")
-    pc.metric("Expected Annual Profit",  f"+${investment * r_opt:,.0f}",
-              help="Based on historical mean returns.")
+    pa.metric("Daily VaR 95%",         f"-${v95:,.2f}")
+    pb.metric("Daily VaR 99%",         f"-${v99:,.2f}")
+    pc.metric("Expected Annual Profit", f"+${investment * r_opt:,.0f}")
 
 
 # ══════════════════════════════════════════════
@@ -519,19 +571,18 @@ with TAB_RISK:
 with TAB_AI:
     st.subheader("🤖 AI-Powered Price Direction Predictor")
     st.info(
-        "**How it works:** A **Random Forest** model (an ensemble of 150 decision trees) "
-        "is trained on 12 technical features — RSI, moving-average ratios, momentum, "
-        "realised volatility — to predict whether tomorrow's return will be positive or negative."
+        "**How it works:** A **Random Forest** model (150 decision trees) "
+        "trained on 12 technical features — RSI, moving-average ratios, momentum, "
+        "realised volatility — predicts whether tomorrow's return will be positive or negative."
     )
 
     selected = st.selectbox("Choose a stock to analyse:", valid_tickers)
 
-    with st.spinner(f"🌲 Training Random Forest on {selected} data  (this takes ~10 s) …"):
+    with st.spinner(f"🌲 Training Random Forest on {selected} data …"):
         model, scaler, X_te, y_te, y_pred, dir_acc = train_predictor(prices[selected])
 
     a1, a2, a3 = st.columns(3)
-    a1.metric("🎯 Direction Accuracy", f"{dir_acc*100:.1f}%",
-              help="% of test days where the model predicted up/down correctly.")
+    a1.metric("🎯 Direction Accuracy", f"{dir_acc*100:.1f}%")
     a2.metric("📊 Test-Set Size",      f"{len(y_te)} days")
     a3.metric("🌲 Trees in Forest",    "150")
 
@@ -570,7 +621,6 @@ with TAB_AI:
                                yaxis_title="Daily Return (%)")
         st.plotly_chart(fig_pred, use_container_width=True)
 
-    # ── Next-day prediction ──
     st.subheader("🔮 Next Trading Day Signal")
     feats_all = build_features(prices[selected])
     last_row  = feats_all.drop("target", axis=1).iloc[-1:]
@@ -581,14 +631,127 @@ with TAB_AI:
 
     d1, d2, d3 = st.columns(3)
     direction = "📈 BUY signal" if next_ret > 0 else "📉 SELL signal"
-    d1.metric("Signal",          direction)
-    d2.metric("Predicted Return", f"{next_ret*100:+.3f}%")
-    d3.metric("Predicted Price",  f"${pred_price:.2f}",  delta=f"{next_ret*100:+.3f}%")
+    d1.metric("Signal",           direction)
+    d2.metric("Predicted Return",  f"{next_ret*100:+.3f}%")
+    d3.metric("Predicted Price",   f"${pred_price:.2f}", delta=f"{next_ret*100:+.3f}%")
 
-    st.warning(
-        "⚠️ **Educational use only.** This model is trained purely on price data. "
-        "Real markets are driven by macro events, earnings, and sentiment that no price-only "
-        "model can fully capture. Never make real investment decisions based solely on ML signals."
+    st.warning("⚠️ Educational use only. Never make real investment decisions based solely on ML signals.")
+
+
+# ══════════════════════════════════════════════
+#  TAB 5 — NEWS SENTIMENT  ← NEW FEATURE
+# ══════════════════════════════════════════════
+with TAB_NEWS:
+    st.subheader("📰 AI News Sentiment Analyzer")
+    st.info(
+        "**How it works:** Fetches the latest news headlines for each stock from Yahoo Finance, "
+        "then uses **financial keyword-based sentiment analysis** to classify each headline "
+        "as 🟢 Bullish, 🔴 Bearish, or 🟡 Neutral. "
+        "An aggregate sentiment score is calculated for each stock."
+    )
+
+    # ── Fetch all news upfront ──
+    all_news = {}
+    with st.spinner("📡 Fetching latest news for all stocks…"):
+        for tkr in valid_tickers:
+            all_news[tkr] = get_stock_news(tkr, max_items=7)
+
+    # ── Overall sentiment summary row ──
+    st.subheader("📊 Overall Sentiment Summary")
+    sent_cols = st.columns(len(valid_tickers))
+
+    for i, tkr in enumerate(valid_tickers):
+        with sent_cols[i]:
+            news_list = all_news[tkr]
+            if news_list:
+                avg_score = float(np.mean([n["score"] for n in news_list]))
+                if avg_score > 0.1:
+                    overall_label = "🟢 Bullish"
+                    delta_color   = "normal"
+                elif avg_score < -0.1:
+                    overall_label = "🔴 Bearish"
+                    delta_color   = "inverse"
+                else:
+                    overall_label = "🟡 Neutral"
+                    delta_color   = "off"
+                st.metric(
+                    label=f"**{tkr}**",
+                    value=overall_label,
+                    delta=f"Avg score: {avg_score:+.2f}",
+                    delta_color=delta_color
+                )
+            else:
+                st.metric(label=f"**{tkr}**", value="No news")
+
+    st.divider()
+
+    # ── Sentiment bar chart ──
+    st.subheader("📈 Sentiment Score Comparison")
+    chart_rows = []
+    for tkr in valid_tickers:
+        nl = all_news[tkr]
+        if nl:
+            chart_rows.append({"Stock": tkr,
+                                "Score": float(np.mean([n["score"] for n in nl]))})
+
+    if chart_rows:
+        cdf = pd.DataFrame(chart_rows)
+        bar_colors = ["#00C851" if s > 0.1 else "#FF4444" if s < -0.1 else "#FFBB33"
+                      for s in cdf["Score"]]
+        fig_sent = go.Figure(go.Bar(
+            x=cdf["Stock"], y=cdf["Score"],
+            marker_color=bar_colors,
+            text=[f"{s:+.3f}" for s in cdf["Score"]],
+            textposition="outside"
+        ))
+        fig_sent.add_hline(y=0.1,  line_dash="dot", line_color="#00C851", opacity=0.4,
+                           annotation_text="Bullish threshold")
+        fig_sent.add_hline(y=-0.1, line_dash="dot", line_color="#FF4444", opacity=0.4,
+                           annotation_text="Bearish threshold")
+        fig_sent.update_layout(
+            template="plotly_dark", height=320,
+            yaxis_title="Sentiment Score",
+            yaxis=dict(range=[-1.2, 1.2]),
+            showlegend=False
+        )
+        st.plotly_chart(fig_sent, use_container_width=True)
+
+    st.divider()
+
+    # ── Detailed news for selected stock ──
+    selected_news = st.selectbox(
+        "📌 Select a stock to read its latest news:",
+        valid_tickers, key="news_sel"
+    )
+
+    st.subheader(f"📰 Latest Headlines — {selected_news}")
+    headlines = all_news.get(selected_news, [])
+
+    if headlines:
+        for item in headlines:
+            col_icon, col_text = st.columns([0.12, 0.88])
+            with col_icon:
+                st.markdown(f"## {item['label'].split()[0]}")   # emoji only
+            with col_text:
+                if item["link"]:
+                    st.markdown(f"**[{item['title']}]({item['link']})**")
+                else:
+                    st.markdown(f"**{item['title']}**")
+                pub = item.get("publisher", "")
+                score_pct = item["score"]
+                detail = f"Sentiment score: **{score_pct:+.2f}**"
+                if pub:
+                    detail += f"  ·  Source: *{pub}*"
+                st.caption(detail)
+            st.divider()
+    else:
+        st.info(f"No recent news found for **{selected_news}**. "
+                "This can happen for less-traded or international stocks. "
+                "Try switching to a different stock.")
+
+    st.caption(
+        "ℹ️ Sentiment is computed using financial keyword matching on Yahoo Finance headlines. "
+        "Scores range from –1 (very bearish) to +1 (very bullish). For research purposes only."
     )
 
 
@@ -598,8 +761,8 @@ with TAB_AI:
 st.divider()
 st.markdown(
     "<div style='text-align:center;color:#555;font-size:0.8rem'>"
-    "QuantVision · Built with Python, Streamlit, Scikit-learn, Plotly & Markowitz MPT · "
-    "Data via Yahoo Finance · Educational purposes only"
+    "QuantVision v2.0 · Python · Streamlit · Scikit-learn · Plotly · Markowitz MPT · "
+    "News Sentiment Analysis · Data via Yahoo Finance · Educational purposes only"
     "</div>",
     unsafe_allow_html=True
 )
